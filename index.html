@@ -3,187 +3,221 @@
 
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>유연근무 스케줄러</title>
-  <meta name="description" content="출퇴근 시간을 기록하고 주간 근무 규칙 충족 여부를 자동으로 확인하는 유연근무 스케줄링 도구입니다." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Pretendard:wght@300;400;500;600;700&display=swap"
+  <link href="https://fonts.googleapis.com/css2?family=Pretendard:wght@300;400;500;600;700;800&display=swap"
     rel="stylesheet" />
   <link rel="stylesheet" href="style.css" />
 </head>
 
 <body>
+
   <div class="app-wrapper">
-    <!-- Header -->
-    <header class="app-header">
-      <div class="header-content">
-        <div class="header-left">
-          <div class="logo-icon">
-            <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
-              <circle cx="14" cy="14" r="12" stroke="url(#grad1)" stroke-width="2.5" />
-              <path d="M14 7v7l4.5 4.5" stroke="url(#grad1)" stroke-width="2.5" stroke-linecap="round" />
-              <defs>
-                <linearGradient id="grad1" x1="2" y1="2" x2="26" y2="26" gradientUnits="userSpaceOnUse">
-                  <stop stop-color="#6C63FF" />
-                  <stop offset="1" stop-color="#48CFAD" />
-                </linearGradient>
-              </defs>
-            </svg>
-          </div>
-          <div>
-            <h1 class="app-title">유연근무 스케줄러</h1>
-            <p class="app-subtitle" id="weekLabel">이번 주 근무 현황</p>
-          </div>
-          <div class="made-by">Made by <strong>HEIDI</strong></div>
-        </div>
-        <div class="header-right">
-          <div class="week-nav">
-            <button class="nav-btn" id="prevWeekBtn" title="이전 주">&#8249;</button>
-            <span class="week-display" id="weekDisplay">로딩중...</span>
-            <button class="nav-btn" id="nextWeekBtn" title="다음 주">&#8250;</button>
-          </div>
-          <button class="reset-btn" id="resetBtn" title="데이터 초기화">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+
+    <!-- ========================================== -->
+    <!-- 데스크톱 전용 UI (웹 환경)                     -->
+    <!-- ========================================== -->
+    <div class="desktop-view">
+      <header class="desk-header">
+        <div class="desk-header-left">
+          <div class="logo-box">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
               stroke-linecap="round">
-              <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
-              <path d="M3 3v5h5" />
+              <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
             </svg>
-            초기화
+          </div>
+          <div class="titles">
+            <h1>유연근무 스케줄러</h1>
+            <p>Made by <strong>HEIDI</strong></p>
+          </div>
+        </div>
+        <div class="desk-header-right">
+          <div class="week-navigator">
+            <button id="deskPrevWeek" title="이전 주">&#8249;</button>
+            <span id="deskWeekDisplay">2026. 03. 02 ~ 2026. 03. 08</span>
+            <button id="deskNextWeek" title="다음 주">&#8250;</button>
+          </div>
+          <button id="deskResetBtn" class="btn-reset">초기화</button>
+        </div>
+      </header>
+
+      <section class="desk-kpi-grid">
+        <!-- Card 1: 총 실 근무시간 -->
+        <div class="desk-kpi-card" id="deskCardTotal">
+          <div class="kpi-label">이번 주 총 실 근무시간</div>
+          <div class="kpi-value" id="deskValTotal">0시간 0분</div>
+          <div class="kpi-status" id="deskStatTotal">대기</div>
+        </div>
+        <!-- Card 2: 남은 근무시간 -->
+        <div class="desk-kpi-card" id="deskCardRemain">
+          <div class="kpi-label">남은 근무시간</div>
+          <div class="kpi-value" id="deskValRemain">40시간 0분</div>
+          <div class="kpi-status" id="deskStatRemain">대기</div>
+        </div>
+        <!-- Card 3: 6시간 미만 근무일 -->
+        <div class="desk-kpi-card" id="deskCardShort">
+          <div class="kpi-label">6시간 미만 근무일</div>
+          <div class="kpi-value" id="deskValShort">없음</div>
+          <div class="kpi-status" id="deskStatShort">대기</div>
+        </div>
+        <!-- Card 4: 단축근무 조건 -->
+        <div class="desk-kpi-card" id="deskCardRule">
+          <div class="kpi-label">단축근무 조건 상태</div>
+          <div class="kpi-value" id="deskValRule">미충족</div>
+          <div class="kpi-status" id="deskStatRule">대기</div>
+        </div>
+      </section>
+
+      <section class="desk-progress-wrap">
+        <div class="progress-head">
+          <span class="p-title">주간 진행률</span>
+          <span class="p-pct" id="deskPctText">0%</span>
+        </div>
+        <div class="progress-track">
+          <div class="progress-fill" id="deskProgressFill"></div>
+          <div class="target-line" style="left:100%;"></div>
+        </div>
+        <div class="progress-labels">
+          <span>0h</span><span>10h</span><span>20h</span><span>30h</span><span>40h</span>
+        </div>
+      </section>
+
+      <section class="desk-table-wrap">
+        <div class="table-header">
+          <h2>주간 근무 입력</h2>
+          <span class="table-desc">값을 입력하면 즉시 자동 계산됩니다.</span>
+        </div>
+        <table class="desk-table">
+          <thead>
+            <tr>
+              <th width="14%">날짜</th>
+              <th width="13%">출근시간</th>
+              <th width="13%">퇴근시간</th>
+              <th width="12%">총 근무시간</th>
+              <th width="12%">휴게시간</th>
+              <th width="14%">실 근무시간</th>
+              <th width="12%">예상 퇴근</th>
+              <th width="10%">공휴일</th>
+            </tr>
+          </thead>
+          <tbody id="deskTableBody">
+            <!-- JS injects rows -->
+          </tbody>
+        </table>
+      </section>
+    </div>
+
+
+    <!-- ========================================== -->
+    <!-- 모바일 전용 UI (홈 대시보드 + 입력 화면 분리)  -->
+    <!-- ========================================== -->
+    <div class="mobile-view">
+
+      <!-- [A] 모바일 홈 대시보드 화면 -->
+      <div id="mobHomeView" class="mob-view-container">
+        <header class="mob-header">
+          <div class="mob-title-area">
+            <div class="mob-logo">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
+              </svg>
+            </div>
+            <div>
+              <h1 class="mob-app-title">유연근무 스케줄러</h1>
+              <p class="mob-app-subtitle">Made by HEIDI</p>
+            </div>
+          </div>
+          <div class="mob-header-actions">
+            <!-- Reset Button Mobile (Icon only) -->
+            <button id="mobResetBtn" class="btn-icon" title="초기화">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+                stroke-linecap="round">
+                <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                <path d="M3 3v5h5" />
+              </svg>
+            </button>
+          </div>
+        </header>
+
+        <!-- Date navigator in mobile home -->
+        <div class="mob-week-nav">
+          <button id="mobPrevWeek">&#8249;</button>
+          <span id="mobWeekDisplay" class="mob-date-text">2026.03.02 ~ 03.08</span>
+          <button id="mobNextWeek">&#8250;</button>
+        </div>
+
+        <div class="mob-dashboard-grid">
+          <!-- Row 1: 이번 주 실 근무시간 & 남은 근무시간 -->
+          <div class="mob-summary-row card-primary">
+            <div class="mob-summary-item split-left">
+              <div class="s-label">이번 주 실 근무시간 <span class="mob-status-dot" id="mobDotTotal"></span></div>
+              <div class="s-val" id="mobValTotal">0시간 0분</div>
+            </div>
+            <div class="mob-summary-item split-right">
+              <div class="s-label opacity-lbl">남은 근무시간</div>
+              <div class="s-val sub-val" id="mobValRemain">40시간</div>
+            </div>
+          </div>
+
+          <!-- Progress Bar Line -->
+          <div class="mob-progress-line">
+            <div class="p-head">
+              <span class="p-title">진행률</span>
+              <span class="p-pct" id="mobPctText">0%</span>
+            </div>
+            <div class="progress-track" style="height: 10px;">
+              <div class="progress-fill" id="mobProgressFill"></div>
+              <div class="target-line" style="left:100%;"></div>
+            </div>
+          </div>
+
+          <!-- Row 2: 6시간 미만 & 단축근무 조건 -->
+          <div class="mob-summary-row card-secondary">
+            <div class="mob-summary-item split-left">
+              <div class="s-label">6시간 미만 근무</div>
+              <div class="s-val sub-val" id="mobValShort">없음</div>
+            </div>
+            <div class="mob-summary-item split-right">
+              <div class="s-label">단축근무 조건</div>
+              <div class="s-val sub-val" id="mobValRule" style="color: var(--status-red);">미충족</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="mob-bottom-action">
+          <button id="btnGoToInput" class="mob-btn-primary">
+            근무 입력하기
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+              stroke-linecap="round">
+              <path d="M5 12h14M12 5l7 7-7 7" />
+            </svg>
           </button>
         </div>
       </div>
-    </header>
 
-    <main class="app-main">
-      <!-- Summary Cards (Screen 2) -->
-      <section class="summary-section">
-        <div class="summary-grid">
-          <div class="summary-card" id="card-total">
-            <div class="card-icon">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                stroke-linecap="round">
-                <circle cx="12" cy="12" r="10" />
-                <path d="M12 6v6l4 2" />
-              </svg>
-            </div>
-            <div class="card-body">
-              <div class="card-label">총 실 근무시간</div>
-              <div class="card-value" id="totalActual">0시간 0분</div>
-            </div>
-            <div class="card-badge" id="badge-total">—</div>
-          </div>
+      <!-- [B] 모바일 근무 입력 리스트 화면 -->
+      <div id="mobInputView" class="mob-view-container" style="display: none;">
+        <header class="mob-header-sub">
+          <button id="btnBackHome" class="btn-icon">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+              stroke-linecap="round">
+              <path d="M19 12H5M12 19l-7-7 7-7" />
+            </svg>
+          </button>
+          <h2>근무 입력</h2>
+          <div style="width:24px;"></div> <!-- balance flex -->
+        </header>
 
-          <div class="summary-card" id="card-remain">
-            <div class="card-icon">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                stroke-linecap="round">
-                <path
-                  d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
-              </svg>
-            </div>
-            <div class="card-body">
-              <div class="card-label">남은 근무시간</div>
-              <div class="card-value" id="remainHours">40시간 0분</div>
-            </div>
-            <div class="card-badge" id="badge-remain">—</div>
-          </div>
+        <div class="mob-card-list" id="mobCardList">
+          <!-- JS injects card elements -->
+        </div>
+      </div>
 
-          <div class="summary-card" id="card-short">
-            <div class="card-icon">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                stroke-linecap="round">
-                <rect x="3" y="4" width="18" height="18" rx="2" />
-                <path d="M16 2v4M8 2v4M3 10h18" />
-              </svg>
-            </div>
-            <div class="card-body">
-              <div class="card-label">6시간 미만 근무일</div>
-              <div class="card-value" id="shortDayStatus">없음</div>
-            </div>
-            <div class="card-badge" id="badge-short">—</div>
-          </div>
+    </div> <!-- /.mobile-view -->
 
-          <div class="summary-card" id="card-rule">
-            <div class="card-icon">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                stroke-linecap="round">
-                <path d="M9 12l2 2 4-4" />
-                <path d="M21 12c0 4.97-4.03 9-9 9s-9-4.03-9-9 4.03-9 9-9c1.66 0 3.22.45 4.56 1.24" />
-              </svg>
-            </div>
-            <div class="card-body">
-              <div class="card-label">단축근무 조건</div>
-              <div class="card-value" id="ruleStatus">미충족</div>
-            </div>
-            <div class="card-badge" id="badge-rule">—</div>
-          </div>
-        </div>
-      </section>
-
-      <!-- Progress Bar -->
-      <section class="progress-section">
-        <div class="progress-header">
-          <span class="progress-label">주간 진행률</span>
-          <span class="progress-percent" id="progressPercent">0%</span>
-        </div>
-        <div class="progress-bar-bg">
-          <div class="progress-bar-fill" id="progressFill"></div>
-          <div class="progress-target-line" style="left: 100%" title="목표: 40시간"></div>
-        </div>
-        <div class="progress-info">
-          <span>0h</span>
-          <span>10h</span>
-          <span>20h</span>
-          <span>30h</span>
-          <span>40h</span>
-        </div>
-      </section>
-
-      <!-- Schedule Table (Screen 1) -->
-      <section class="schedule-section">
-        <div class="section-header">
-          <h2 class="section-title">주간 근무 입력</h2>
-          <div class="section-hint">출퇴근 시간을 입력하면 자동으로 계산됩니다</div>
-        </div>
-        <div class="table-wrapper">
-          <table class="schedule-table" id="scheduleTable">
-            <thead>
-              <tr>
-                <th class="col-date">날짜</th>
-                <th class="col-time">출근시간</th>
-                <th class="col-time">퇴근시간</th>
-                <th class="col-calc">총 근무시간</th>
-                <th class="col-calc">휴게시간</th>
-                <th class="col-actual">실 근무시간</th>
-                <th class="col-est">예상 퇴근</th>
-                <th class="col-holiday">공휴일</th>
-              </tr>
-            </thead>
-            <tbody id="tableBody">
-              <!-- rows injected by JS -->
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <!-- Suggestion Section -->
-      <section class="suggestion-section" id="suggestionSection">
-        <div class="suggestion-header">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-            stroke-linecap="round">
-            <circle cx="12" cy="12" r="10" />
-            <line x1="12" y1="8" x2="12" y2="12" />
-            <line x1="12" y1="16" x2="12.01" y2="16" />
-          </svg>
-          남은 요일 필요 근무시간
-        </div>
-        <div class="suggestion-body" id="suggestionBody">
-          —
-        </div>
-      </section>
-    </main>
-  </div>
+  </div> <!-- /.app-wrapper -->
 
   <script src="script.js"></script>
 </body>

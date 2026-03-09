@@ -1,5 +1,5 @@
 /* ============================================================
-   유연근무 스케줄러 - script.js
+   유연근무 스케줄러 - 스크립트 (웹/모바일 레이아웃 동시 지원)
    ============================================================ */
 
 'use strict';
@@ -8,18 +8,21 @@
 const WORK_DAYS = [1, 2, 3, 4, 5];
 const DAY_NAMES = ['일', '월', '화', '수', '목', '금', '토'];
 const DAY_NAMES_EN = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+
 const TARGET_HOURS = 40 * 60;        // 40h in minutes
 const SHORT_THRESHOLD = 6 * 60;      // 6h in minutes
 const BREAK_THRESHOLD = 8 * 60;      // 8h → 1h break, else 30m
 const HOLIDAY_CREDIT = 8 * 60;       // 8h auto-credited for holiday
-const DEFAULT_START = '09:30';       // default start time shown in suggestion
-const DEFAULT_END = '18:30';       // default end time shown in suggestion
+
+const DEFAULT_START = '09:30';
+const DEFAULT_END = '18:30';
+const STORE_KEY = 'flexSchedule_v3_responsive';
 
 /* ─── State ──────────────────────────────────────────── */
 let currentWeekOffset = 0;
 let scheduleData = {}; // key: dateString → { start, end, holiday }
 
-/* ─── Utility: time helpers ──────────────────────────── */
+/* ─── Core: Time & Math ─────────────────────────────── */
 function parseTime(str) {
     if (!str) return null;
     const [h, m] = str.split(':').map(Number);
@@ -47,14 +50,14 @@ function getBreakMins(totalWorkMins) {
     return totalWorkMins >= BREAK_THRESHOLD ? 60 : 30;
 }
 
-/* ─── Utility: date helpers ──────────────────────────── */
+/* ─── Core: Dates ───────────────────────────────────── */
 function getWeekDates(offset = 0) {
     const today = new Date();
-    const day = today.getDay();
-    const diffToMon = (day === 0 ? -6 : 1 - day);
+    const diffToMon = (today.getDay() === 0 ? -6 : 1 - today.getDay());
     const monday = new Date(today);
     monday.setDate(today.getDate() + diffToMon + offset * 7);
     monday.setHours(0, 0, 0, 0);
+
     const days = [];
     for (let i = 0; i < 7; i++) {
         const d = new Date(monday);
@@ -64,483 +67,401 @@ function getWeekDates(offset = 0) {
     return days;
 }
 
-function dateKey(date) {
-    const y = date.getFullYear();
-    const m = String(date.getMonth() + 1).padStart(2, '0');
-    const d = String(date.getDate()).padStart(2, '0');
-    return `${y}-${m}-${d}`;
+function dateKey(date) { return date.toISOString().slice(0, 10); }
+
+function isToday(date) { return date.toDateString() === new Date().toDateString(); }
+
+function isWeekend(date) { return date.getDay() === 0 || date.getDay() === 6; }
+
+function formatWeekRange(dates, short = false) {
+    const y1 = dates[0].getFullYear(), m1 = String(dates[0].getMonth() + 1).padStart(2, '0'), d1 = String(dates[0].getDate()).padStart(2, '0');
+    const y2 = dates[6].getFullYear(), m2 = String(dates[6].getMonth() + 1).padStart(2, '0'), d2 = String(dates[6].getDate()).padStart(2, '0');
+    if (short) return `${y1}.${m1}.${d1} ~ ${m2}.${d2}`;
+    return `${y1}. ${m1}. ${d1} ~ ${y2}. ${m2}. ${d2}`;
 }
 
-function isToday(date) {
-    return date.toDateString() === new Date().toDateString();
-}
-
-function isWeekend(date) {
-    return date.getDay() === 0 || date.getDay() === 6;
-}
-
-function formatWeekRange(dates) {
-    const fmt = (d) =>
-        `${d.getFullYear()}. ${String(d.getMonth() + 1).padStart(2, '0')}. ${String(d.getDate()).padStart(2, '0')}`;
-    return `${fmt(dates[0])} ~ ${fmt(dates[6])}`;
-}
-
-/* ─── Storage ────────────────────────────────────────── */
-const STORE_KEY = 'flexSchedule_v2';
-
+/* ─── Data Storage ──────────────────────────────────── */
 function loadData() {
     try {
         const raw = localStorage.getItem(STORE_KEY);
         if (raw) scheduleData = JSON.parse(raw);
-    } catch {
-        scheduleData = {};
-    }
+    } catch { scheduleData = {}; }
 }
-
 function saveData() {
-    try {
-        localStorage.setItem(STORE_KEY, JSON.stringify(scheduleData));
-    } catch { /* storage full */ }
+    try { localStorage.setItem(STORE_KEY, JSON.stringify(scheduleData)); } catch { }
 }
 
-/* ─── Calculation ─────────────────────────────────────── */
+/* ─── Logic: Calculate rows & weekly summary ────────── */
 function calcRow(start, end) {
-    const s = parseTime(start);
-    const e = parseTime(end);
-    if (s == null || e == null) return null;
-    if (e <= s) return null;
+    const s = parseTime(start), e = parseTime(end);
+    if (s == null || e == null || e <= s) return null;
     const totalWork = e - s;
     const breakMins = getBreakMins(totalWork);
-    const actualWork = totalWork - breakMins;
-    return { totalWork, breakMins, actualWork };
+    return { totalWork, breakMins, actualWork: totalWork - breakMins };
 }
 
 function calcWeekSummary(dates) {
-    let totalActual = 0;
-    let shortDayCount = 0;
-    let filledDays = 0;
-
-    dates.forEach((date) => {
+    let totalActual = 0, shortDayCount = 0;
+    dates.forEach(date => {
         if (isWeekend(date)) return;
-        const key = dateKey(date);
-        const entry = scheduleData[key];
+        const entry = scheduleData[dateKey(date)];
         if (!entry) return;
-
-        // Holiday: auto-credit 8h, no short-day
-        if (entry.holiday) {
-            filledDays++;
-            totalActual += HOLIDAY_CREDIT;
-            return;
-        }
-
+        if (entry.holiday) { totalActual += HOLIDAY_CREDIT; return; }
         if (!entry.start || !entry.end) return;
-        const result = calcRow(entry.start, entry.end);
-        if (!result) return;
-        filledDays++;
-        totalActual += result.actualWork;
-        if (result.actualWork < SHORT_THRESHOLD) shortDayCount++;
+        const res = calcRow(entry.start, entry.end);
+        if (!res) return;
+        totalActual += res.actualWork;
+        if (res.actualWork < SHORT_THRESHOLD) shortDayCount++;
     });
-
-    const remaining = Math.max(0, TARGET_HOURS - totalActual);
-    const hasShortDay = shortDayCount > 0;
-    const isOver = totalActual > TARGET_HOURS;
-
-    return { totalActual, remaining, hasShortDay, shortDayCount, isOver, filledDays };
+    return {
+        totalActual,
+        remaining: Math.max(0, TARGET_HOURS - totalActual),
+        hasShortDay: shortDayCount > 0,
+        isOver: totalActual > TARGET_HOURS
+    };
 }
 
-/* ─── DOM: build table rows ──────────────────────────── */
-function buildTable(dates) {
-    const tbody = document.getElementById('tableBody');
-    tbody.innerHTML = '';
+/* Needed mins for estimate */
+function neededMinsForDay(targetDate, dates) {
+    let totalActual = 0, remainingDays = 0, targetKey = dateKey(targetDate);
+    const today = new Date(); today.setHours(0, 0, 0, 0);
 
-    dates.forEach((date) => {
-        const key = dateKey(date);
-        const entry = scheduleData[key] || {};
-        const weekend = isWeekend(date);
-        const today = isToday(date);
-        const dayIdx = date.getDay();
-        const isHoliday = !!entry.holiday;
-
-        const tr = document.createElement('tr');
-        if (weekend) tr.classList.add('is-weekend');
-        if (today) tr.classList.add('is-today');
-        if (isHoliday) tr.classList.add('is-holiday');
-        tr.id = `row-${key}`;
-
-        // ── Date cell ──
-        const tdDate = document.createElement('td');
-        tdDate.classList.add('date-cell');
-        const weekdayEn = DAY_NAMES_EN[dayIdx];
-        const monthDay = `${String(date.getMonth() + 1).padStart(2, '0')}/${String(date.getDate()).padStart(2, '0')}`;
-        tdDate.innerHTML = `
-      <span class="date-weekday">${weekdayEn}</span>
-      <span class="date-day">${weekend ? (dayIdx === 0 ? '일' : '토') : DAY_NAMES[dayIdx]}요일</span>
-      <div class="date-mmdd">${monthDay}</div>
-    `;
-        tr.appendChild(tdDate);
-
-        // ── Start time input ──
-        const tdStart = document.createElement('td');
-        const startInput = document.createElement('input');
-        startInput.type = 'time';
-        startInput.className = 'time-input';
-        startInput.id = `start-${key}`;
-        startInput.value = entry.start || '';
-        startInput.disabled = weekend || isHoliday;
-        startInput.setAttribute('aria-label', `${monthDay} 출근시간`);
-        tdStart.appendChild(startInput);
-        tr.appendChild(tdStart);
-
-        // ── End time input ──
-        const tdEnd = document.createElement('td');
-        const endInput = document.createElement('input');
-        endInput.type = 'time';
-        endInput.className = 'time-input';
-        endInput.id = `end-${key}`;
-        endInput.value = entry.end || '';
-        endInput.disabled = weekend || isHoliday;
-        endInput.setAttribute('aria-label', `${monthDay} 퇴근시간`);
-        tdEnd.appendChild(endInput);
-        tr.appendChild(tdEnd);
-
-        // ── Calc cells ──
-        const tdTotal = document.createElement('td');
-        tdTotal.classList.add('calc-cell');
-        tdTotal.id = `total-${key}`;
-        tdTotal.textContent = '—';
-        tr.appendChild(tdTotal);
-
-        const tdBreak = document.createElement('td');
-        tdBreak.classList.add('calc-cell');
-        tdBreak.id = `break-${key}`;
-        tdBreak.textContent = '—';
-        tr.appendChild(tdBreak);
-
-        const tdActual = document.createElement('td');
-        tdActual.classList.add('actual-cell');
-        tdActual.id = `actual-${key}`;
-        tdActual.textContent = '—';
-        tr.appendChild(tdActual);
-
-        // ── Est end time ──
-        const tdEst = document.createElement('td');
-        tdEst.classList.add('est-cell');
-        tdEst.id = `est-${key}`;
-        tdEst.textContent = '—';
-        tr.appendChild(tdEst);
-
-        // ── Holiday toggle ──
-        const tdHoliday = document.createElement('td');
-        tdHoliday.classList.add('holiday-cell');
-        if (!weekend) {
-            const btn = document.createElement('button');
-            btn.className = `holiday-btn${isHoliday ? ' active' : ''}`;
-            btn.id = `holiday-${key}`;
-            btn.title = isHoliday ? '공휴일 해제' : '공휴일로 설정';
-            btn.innerHTML = isHoliday
-                ? `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M20 6L9 17l-5-5"/></svg> 공휴일`
-                : `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>`;
-            btn.addEventListener('click', () => toggleHoliday(key, date, dates));
-            tdHoliday.appendChild(btn);
-        }
-        tr.appendChild(tdHoliday);
-
-        tbody.appendChild(tr);
-
-        // ── Event listeners for time change ──
-        const handleChange = () => {
-            if (!scheduleData[key]) scheduleData[key] = {};
-            scheduleData[key].start = startInput.value;
-            scheduleData[key].end = endInput.value;
-            saveData();
-            updateRow(key, date);
-            updateSummary(dates);
-        };
-
-        // Focus: set default if empty AND immediately trigger calculation
-        startInput.addEventListener('focus', () => {
-            if (!startInput.value) {
-                startInput.value = DEFAULT_START;
-                handleChange();
-            }
-        });
-        endInput.addEventListener('focus', () => {
-            if (!endInput.value) {
-                endInput.value = DEFAULT_END;
-                handleChange();
-            }
-        });
-
-        startInput.addEventListener('change', handleChange);
-        endInput.addEventListener('change', handleChange);
-
-        // Initial render
-        updateRow(key, date);
-    });
-}
-
-/* ─── Toggle holiday ─────────────────────────────────── */
-function toggleHoliday(key, date, dates) {
-    if (!scheduleData[key]) scheduleData[key] = {};
-    const isHoliday = !scheduleData[key].holiday;
-    scheduleData[key].holiday = isHoliday;
-    if (isHoliday) {
-        // Clear time inputs when marking as holiday
-        scheduleData[key].start = '';
-        scheduleData[key].end = '';
-    }
-    saveData();
-
-    // Update row UI
-    const tr = document.getElementById(`row-${key}`);
-    const startInput = document.getElementById(`start-${key}`);
-    const endInput = document.getElementById(`end-${key}`);
-    const btn = document.getElementById(`holiday-${key}`);
-
-    if (isHoliday) {
-        tr.classList.add('is-holiday');
-        startInput.value = '';
-        endInput.value = '';
-        startInput.disabled = true;
-        endInput.disabled = true;
-        btn.classList.add('active');
-        btn.title = '공휴일 해제';
-        btn.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M20 6L9 17l-5-5"/></svg> 공휴일`;
-    } else {
-        tr.classList.remove('is-holiday');
-        startInput.disabled = false;
-        endInput.disabled = false;
-        btn.classList.remove('active');
-        btn.title = '공휴일로 설정';
-        btn.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>`;
-    }
-
-    updateRow(key, date);
-    updateSummary(dates);
-}
-
-/* ─── Update a single row's calculated cells ─────────── */
-function updateRow(key, date) {
-    const entry = scheduleData[key] || {};
-    const tdTotal = document.getElementById(`total-${key}`);
-    const tdBreak = document.getElementById(`break-${key}`);
-    const tdActual = document.getElementById(`actual-${key}`);
-    const tdEst = document.getElementById(`est-${key}`);
-    if (!tdTotal) return;
-
-    // Holiday row
-    if (entry.holiday) {
-        tdTotal.textContent = '—';
-        tdBreak.textContent = '—';
-        tdActual.innerHTML = `8시간 <span class="holiday-chip">공휴일</span>`;
-        tdActual.classList.remove('short-day');
-        tdEst.textContent = '—';
-        tdEst.classList.remove('available');
-        return;
-    }
-
-    const result = calcRow(entry.start, entry.end);
-
-    if (result) {
-        tdTotal.textContent = formatMins(result.totalWork);
-        tdBreak.textContent = formatMins(result.breakMins);
-        const isShort = result.actualWork < SHORT_THRESHOLD;
-        tdActual.innerHTML = formatMins(result.actualWork) +
-            (isShort ? '<span class="short-chip">단축</span>' : '');
-        tdActual.classList.toggle('short-day', isShort);
-        tdEst.textContent = '—';
-        tdEst.classList.remove('available');
-    } else {
-        tdTotal.textContent = '—';
-        tdBreak.textContent = '—';
-        tdActual.textContent = '—';
-        tdActual.classList.remove('short-day');
-
-        // Estimate end time: if start entered but no end, and is today
-        if (entry.start && !entry.end && isToday(date)) {
-            const startMins = parseTime(entry.start);
-            const needed = neededMinsForDay(date);
-            if (needed != null && needed > 0) {
-                const estEnd = startMins + needed + (needed >= BREAK_THRESHOLD ? 60 : 30);
-                const estStr = minsToHHMM(estEnd);
-                tdEst.textContent = estStr ? `~${estStr}` : '—';
-                tdEst.classList.add('available');
-            } else {
-                tdEst.textContent = '—';
-                tdEst.classList.remove('available');
-            }
-        } else {
-            tdEst.textContent = '—';
-            tdEst.classList.remove('available');
-        }
-    }
-}
-
-/* ─── Needed minutes for today ───────────────────────── */
-function neededMinsForDay(targetDate) {
-    const dates = getWeekDates(currentWeekOffset);
-    let totalActual = 0;
-    let remainingDays = 0;
-    const targetKey = dateKey(targetDate);
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    dates.forEach((d) => {
+    dates.forEach(d => {
         if (isWeekend(d)) return;
         const key = dateKey(d);
         const entry = scheduleData[key] || {};
-        if (entry.holiday) {
-            totalActual += HOLIDAY_CREDIT;
-            return;
-        }
-        const result = calcRow(entry.start, entry.end);
-        const dDate = new Date(d);
-        dDate.setHours(0, 0, 0, 0);
-        if (result) {
-            if (key !== targetKey) totalActual += result.actualWork;
-        } else if (dDate >= today) {
-            remainingDays++;
-        }
+        if (entry.holiday) { totalActual += HOLIDAY_CREDIT; return; }
+        const res = calcRow(entry.start, entry.end);
+        const dDate = new Date(d); dDate.setHours(0, 0, 0, 0);
+        if (res) { if (key !== targetKey) totalActual += res.actualWork; }
+        else if (dDate >= today) { remainingDays++; }
     });
-
-    const remaining = Math.max(0, TARGET_HOURS - totalActual);
+    const rem = Math.max(0, TARGET_HOURS - totalActual);
     if (remainingDays === 0) return 0;
-    return Math.ceil(remaining / remainingDays);
+    return Math.ceil(rem / remainingDays);
 }
 
-/* ─── Summary cards & progress ───────────────────────── */
-function updateSummary(dates) {
-    const { totalActual, remaining, hasShortDay, isOver } = calcWeekSummary(dates);
 
-    // Total actual
-    const elTotal = document.getElementById('totalActual');
-    const cardTotal = document.getElementById('card-total');
-    const badgeTotal = document.getElementById('badge-total');
-    elTotal.textContent = formatMins(totalActual);
-    if (isOver) setCardStatus(cardTotal, badgeTotal, 'red', '초과');
-    else if (totalActual >= TARGET_HOURS) setCardStatus(cardTotal, badgeTotal, 'green', '달성');
-    else if (totalActual >= TARGET_HOURS * 0.7) setCardStatus(cardTotal, badgeTotal, 'yellow', '진행중');
-    else setCardStatus(cardTotal, badgeTotal, null, '—');
-
-    // Remaining
-    const elRemain = document.getElementById('remainHours');
-    const cardRemain = document.getElementById('card-remain');
-    const badgeRemain = document.getElementById('badge-remain');
-    if (isOver) {
-        elRemain.textContent = `+${formatMins(totalActual - TARGET_HOURS)} 초과`;
-        setCardStatus(cardRemain, badgeRemain, 'red', '초과');
-    } else {
-        elRemain.textContent = formatMins(remaining);
-        if (remaining === 0) setCardStatus(cardRemain, badgeRemain, 'green', '완료');
-        else if (remaining < TARGET_HOURS * 0.3) setCardStatus(cardRemain, badgeRemain, 'yellow', '거의 완료');
-        else setCardStatus(cardRemain, badgeRemain, null, '—');
-    }
-
-    // Short day
-    const elShort = document.getElementById('shortDayStatus');
-    const cardShort = document.getElementById('card-short');
-    const badgeShort = document.getElementById('badge-short');
-    if (hasShortDay) {
-        elShort.textContent = '있음 ✓';
-        setCardStatus(cardShort, badgeShort, 'green', '충족');
-    } else {
-        elShort.textContent = '없음';
-        setCardStatus(cardShort, badgeShort, 'yellow', '미충족');
-    }
-
-    // Rule
-    const elRule = document.getElementById('ruleStatus');
-    const cardRule = document.getElementById('card-rule');
-    const badgeRule = document.getElementById('badge-rule');
-    const rule1 = totalActual >= TARGET_HOURS && !isOver;
-    const rule2 = hasShortDay;
-    if (rule1 && rule2) { elRule.textContent = '충족 ✓'; setCardStatus(cardRule, badgeRule, 'green', '충족'); }
-    else if (isOver) { elRule.textContent = '초과!'; setCardStatus(cardRule, badgeRule, 'red', '위반'); }
-    else { elRule.textContent = '미충족'; setCardStatus(cardRule, badgeRule, rule1 || rule2 ? 'yellow' : null, '미충족'); }
-
-    // Progress bar
-    const pct = (totalActual / TARGET_HOURS) * 100;
-    const fill = document.getElementById('progressFill');
-    const pctLabel = document.getElementById('progressPercent');
-    fill.style.width = `${Math.min(pct, 100)}%`;
-    fill.className = 'progress-bar-fill';
-    if (isOver) fill.classList.add('over');
-    else if (pct >= 80) fill.classList.add('near');
-    pctLabel.textContent = `${Math.round(Math.min(pct, 100))}%`;
-
-    updateSuggestion(dates, remaining);
-}
-
-function setCardStatus(card, badge, status, label) {
-    card.className = 'summary-card';
-    if (status) card.classList.add(`status-${status}`);
-    badge.textContent = label;
-}
-
-/* ─── Suggestion section ─────────────────────────────── */
-function updateSuggestion(dates, remaining) {
-    const section = document.getElementById('suggestionSection');
-    const body = document.getElementById('suggestionBody');
-
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    const remainingDays = dates.filter((d) => {
-        if (isWeekend(d)) return false;
-        const dDate = new Date(d);
-        dDate.setHours(0, 0, 0, 0);
-        if (dDate < today) return false;
-        const key = dateKey(d);
-        const entry = scheduleData[key] || {};
-        if (entry.holiday) return false;
-        return !(entry.start && entry.end && calcRow(entry.start, entry.end));
-    });
-
-    if (remaining <= 0 || remainingDays.length === 0) {
-        section.classList.remove('visible');
-        return;
-    }
-
-    section.classList.add('visible');
-    const perDay = Math.ceil(remaining / remainingDays.length);
-    const startDefault = parseTime(DEFAULT_START);
-
-    body.innerHTML = remainingDays.map((d) => {
-        const dayName = DAY_NAMES[d.getDay()] + '요일';
-        const breakMins = perDay >= BREAK_THRESHOLD ? 60 : 30;
-        const estEnd = minsToHHMM(startDefault + perDay + breakMins);
-        return `<div class="suggest-chip">
-      <span class="suggest-day">${dayName}</span>
-      ${formatMins(perDay)} 필요
-      ${estEnd ? `<span style="color:var(--text-muted)">→ ${DEFAULT_START} 출근 시 ~${estEnd} 퇴근</span>` : ''}
-    </div>`;
-    }).join('');
-}
-
-/* ─── Init ───────────────────────────────────────────── */
-function renderWeek() {
+/* ============================================================
+   [UI UPDATE CORE] 데스크탑 / 모바일 동시에 렌더링
+============================================================ */
+function updateAllViews() {
     const dates = getWeekDates(currentWeekOffset);
-    document.getElementById('weekDisplay').textContent = formatWeekRange(dates);
-    document.getElementById('weekLabel').textContent =
-        currentWeekOffset === 0 ? '이번 주 근무 현황'
-            : currentWeekOffset < 0 ? `${Math.abs(currentWeekOffset)}주 전 근무 현황`
-                : `${currentWeekOffset}주 후 근무 현황`;
 
-    buildTable(dates);
-    updateSummary(dates);
+    // Date Navigators
+    document.getElementById('deskWeekDisplay').textContent = formatWeekRange(dates, false);
+    document.getElementById('mobWeekDisplay').textContent = formatWeekRange(dates, true);
+
+    // 1. Build Desktop Table
+    buildDesktopTable(dates);
+
+    // 2. Build Mobile Cards
+    buildMobileCards(dates);
+
+    // 3. Update Summaries (Cards & Progress)
+    const summ = calcWeekSummary(dates);
+    updateDesktopSummary(summ);
+    updateMobileSummary(summ);
 }
 
-function init() {
-    loadData();
-    document.getElementById('prevWeekBtn').addEventListener('click', () => { currentWeekOffset--; renderWeek(); });
-    document.getElementById('nextWeekBtn').addEventListener('click', () => { currentWeekOffset++; renderWeek(); });
-    document.getElementById('resetBtn').addEventListener('click', () => {
-        if (!confirm('이번 주 데이터를 초기화하겠습니까?')) return;
-        getWeekDates(currentWeekOffset).forEach((d) => { delete scheduleData[dateKey(d)]; });
-        saveData();
-        renderWeek();
+
+/* ─── 1. Desktop UI ─────────────────────────────────── */
+function buildDesktopTable(dates) {
+    const tbody = document.getElementById('deskTableBody');
+    tbody.innerHTML = '';
+
+    dates.forEach(date => {
+        const key = dateKey(date), entry = scheduleData[key] || {};
+        const tr = document.createElement('tr');
+        const isWk = isWeekend(date), isHol = !!entry.holiday, isTod = isToday(date);
+        if (isWk) tr.classList.add('row-weekend');
+        if (isTod) tr.classList.add('row-today');
+        if (isHol) tr.classList.add('row-holiday');
+
+        // Date
+        const tdDate = document.createElement('td'); tdDate.className = 'col-date';
+        tdDate.innerHTML = `<span class="date-day">${DAY_NAMES[date.getDay()]}요일</span><span class="date-sub">${String(date.getMonth() + 1).padStart(2, '0')}/${String(date.getDate()).padStart(2, '0')}</span>`;
+        tr.appendChild(tdDate);
+
+        // Inputs
+        const createInput = (type) => {
+            const td = document.createElement('td');
+            const inp = document.createElement('input');
+            inp.type = 'time'; inp.className = 'time-input';
+            inp.value = entry[type] || '';
+            inp.disabled = isWk || isHol;
+            inp.addEventListener('focus', () => { if (!inp.value) { inp.value = type === 'start' ? DEFAULT_START : DEFAULT_END; handleDataChange(key, 'start', tr.querySelector('.time-input').value, 'end', tr.querySelectorAll('.time-input')[1].value); } });
+            inp.addEventListener('change', (e) => handleDataChange(key, type, e.target.value));
+            td.appendChild(inp); return td;
+        };
+        tr.appendChild(createInput('start'));
+        tr.appendChild(createInput('end'));
+
+        // Calc cells
+        const cTotal = document.createElement('td'); cTotal.className = 'col-calc';
+        const cBreak = document.createElement('td'); cBreak.className = 'col-calc';
+        const cActual = document.createElement('td'); cActual.className = 'col-actual';
+        const cEst = document.createElement('td'); cEst.className = 'col-est';
+
+        if (isHol) {
+            cTotal.textContent = '—'; cBreak.textContent = '—'; cEst.textContent = '—';
+            cActual.innerHTML = `8시간 <span class="holiday-lbl">공휴일</span>`;
+        } else {
+            const res = calcRow(entry.start, entry.end);
+            if (res) {
+                cTotal.textContent = formatMins(res.totalWork);
+                cBreak.textContent = formatMins(res.breakMins);
+                const sht = res.actualWork < SHORT_THRESHOLD;
+                cActual.innerHTML = formatMins(res.actualWork) + (sht ? '<span class="short-tag">단축</span>' : '');
+                if (sht) cActual.style.color = 'var(--accent-teal)';
+                cEst.textContent = '—';
+            } else {
+                cTotal.textContent = '—'; cBreak.textContent = '—'; cActual.textContent = '—';
+                if (entry.start && !entry.end && isToday(date)) {
+                    const needed = neededMinsForDay(date, dates);
+                    if (needed > 0) {
+                        const ed = parseTime(entry.start) + needed + (needed >= BREAK_THRESHOLD ? 60 : 30);
+                        cEst.textContent = `~${minsToHHMM(ed)}`; cEst.classList.add('active');
+                    } else cEst.textContent = '—';
+                } else cEst.textContent = '—';
+            }
+        }
+        tr.appendChild(cTotal); tr.appendChild(cBreak); tr.appendChild(cActual); tr.appendChild(cEst);
+
+        // Holiday btn
+        const tdHol = document.createElement('td');
+        if (!isWk) {
+            const btn = document.createElement('button');
+            btn.className = `btn-toggle-holiday ${isHol ? 'active' : ''}`;
+            btn.textContent = isHol ? '✓ 공휴일' : '설정';
+            btn.onclick = () => toggleHoliday(key);
+            tdHol.appendChild(btn);
+        }
+        tr.appendChild(tdHol);
+        tbody.appendChild(tr);
     });
-    renderWeek();
 }
 
-document.addEventListener('DOMContentLoaded', init);
+function updateDesktopSummary(summ) {
+    // Cards
+    const setSt = (id, val, stCls, statTxt) => {
+        const card = document.getElementById(`deskCard${id}`);
+        document.getElementById(`deskVal${id}`).textContent = val;
+        document.getElementById(`deskStat${id}`).textContent = statTxt;
+        card.className = 'desk-kpi-card'; if (stCls) card.classList.add(`status-${stCls}`);
+    };
+
+    if (summ.isOver) setSt('Total', formatMins(summ.totalActual), 'red', '초과 달성');
+    else if (summ.totalActual >= TARGET_HOURS) setSt('Total', formatMins(summ.totalActual), 'green', '목표 달성');
+    else setSt('Total', formatMins(summ.totalActual), 'yellow', '진행중');
+
+    if (summ.isOver) setSt('Remain', `+${formatMins(summ.totalActual - TARGET_HOURS)}`, 'red', '초과');
+    else if (summ.remaining === 0) setSt('Remain', '0시간', 'green', '완료');
+    else setSt('Remain', formatMins(summ.remaining), '', '남음');
+
+    if (summ.hasShortDay) setSt('Short', '있음', 'green', '충족');
+    else setSt('Short', '없음', 'yellow', '미충족');
+
+    const rule1 = summ.totalActual >= TARGET_HOURS && !summ.isOver, rule2 = summ.hasShortDay;
+    if (rule1 && rule2) setSt('Rule', '충족', 'green', '정상');
+    else if (summ.isOver) setSt('Rule', '초과 위반', 'red', '위반');
+    else setSt('Rule', '미충족', (rule1 || rule2) ? 'yellow' : '', '확인 필요');
+
+    // Progress
+    const pct = (summ.totalActual / TARGET_HOURS) * 100;
+    const fill = document.getElementById('deskProgressFill');
+    fill.style.width = `${Math.min(pct, 100)}%`;
+    fill.className = 'progress-fill';
+    if (summ.isOver) fill.classList.add('over');
+    document.getElementById('deskPctText').textContent = `${Math.round(Math.min(pct, 100))}%`;
+}
+
+
+/* ─── 2. Mobile UI ──────────────────────────────────── */
+function buildMobileCards(dates) {
+    const list = document.getElementById('mobCardList');
+    list.innerHTML = '';
+
+    dates.forEach(date => {
+        if (isWeekend(date)) return; // Skip weekends in mobile view for cleaner UI (optional, but requested layout focuses on Mon-Fri usually. Let's show all but dim)
+
+        const key = dateKey(date), entry = scheduleData[key] || {};
+        const isWk = isWeekend(date), isHol = !!entry.holiday, isTod = isToday(date);
+
+        // Determine if the card should be collapsed by default.
+        // Let's collapse past days and weekends, but keep today and future days expanded.
+        const today = new Date(); today.setHours(0, 0, 0, 0);
+        const dDate = new Date(date); dDate.setHours(0, 0, 0, 0);
+        const isPast = dDate < today;
+        const isCollapsed = isWk || isPast;
+
+        const card = document.createElement('div');
+        card.className = `mob-day-card ${isWk ? 'card-weekend' : ''} ${isTod ? 'card-today' : ''} ${isHol ? 'is-holiday' : ''} ${isCollapsed ? 'collapsed' : ''}`;
+
+        // Header (Clickable for Expand/Collapse)
+        const head = document.createElement('div'); head.className = 'mob-card-top';
+        const badgeTxt = isWk ? (date.getDay() === 0 ? '일' : '토') : DAY_NAMES[date.getDay()];
+        head.innerHTML = `
+      <div class="mob-date-head-left">
+        <svg class="mob-chevron" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+        <div class="mob-date-info">
+          <div class="mob-day-badge">${badgeTxt}요일</div>
+          <div class="mob-date-full">${String(date.getMonth() + 1).padStart(2, '0')}.${String(date.getDate()).padStart(2, '0')}</div>
+        </div>
+      </div>
+    `;
+
+        // Toggle logic for Accordion
+        head.onclick = (e) => {
+            // Don't toggle accordion if the holiday toggle switch was clicked
+            if (e.target.closest('.mob-toggle-wrap')) return;
+            card.classList.toggle('collapsed');
+        };
+
+        // Holiday Toggle (Inside Header)
+        if (!isWk) {
+            const togWrap = document.createElement('div'); togWrap.className = 'mob-toggle-wrap';
+            togWrap.innerHTML = `<span class="mob-toggle-lbl">공휴일</span><div class="mob-toggle ${isHol ? 'active' : ''}"></div>`;
+            togWrap.querySelector('.mob-toggle').onclick = (e) => toggleHoliday(key);
+            head.appendChild(togWrap);
+        }
+        card.appendChild(head);
+
+        // Card Body (Collapsible Content)
+        const bodyPanel = document.createElement('div');
+        bodyPanel.className = 'mob-card-body';
+
+        // Inputs
+        const rowInp = document.createElement('div'); rowInp.className = 'mob-input-row';
+        const createMobInp = (type, lbl) => {
+            const grp = document.createElement('div'); grp.className = 'mob-input-group';
+            const inp = document.createElement('input'); inp.type = 'time'; inp.className = 'mob-time-input';
+            inp.value = entry[type] || '';
+            inp.disabled = isWk || isHol;
+            inp.addEventListener('focus', () => { if (!inp.value) { inp.value = type === 'start' ? DEFAULT_START : DEFAULT_END; handleDataChange(key, type, inp.value); } });
+            inp.addEventListener('change', (e) => handleDataChange(key, type, e.target.value));
+            grp.innerHTML = `<label>${lbl}</label>`; grp.appendChild(inp); return grp;
+        };
+        rowInp.appendChild(createMobInp('start', '출근 시간'));
+        rowInp.appendChild(createMobInp('end', '퇴근 시간'));
+        bodyPanel.appendChild(rowInp);
+
+        // Results
+        const resWrap = document.createElement('div'); resWrap.className = 'mob-calc-row';
+        if (isHol) {
+            resWrap.innerHTML = `<div class="mob-calc-result"><span class="big-lbl">자동 인정</span><span class="big-val">8시간 0분</span></div>`;
+        } else {
+            const res = calcRow(entry.start, entry.end);
+            if (res) {
+                resWrap.innerHTML = `
+          <div class="mob-calc-item"><span class="c-lbl">총 근무시간</span><span class="c-val">${formatMins(res.totalWork)}</span></div>
+          <div class="mob-calc-item"><span class="c-lbl">휴게시간</span><span class="c-val">${formatMins(res.breakMins)}</span></div>
+          <div class="mob-calc-result"><span class="big-lbl">실 근무시간</span><span class="big-val" ${res.actualWork < SHORT_THRESHOLD ? 'style="color:var(--accent-teal)"' : ''}>${formatMins(res.actualWork)}</span></div>
+        `;
+            } else {
+                resWrap.innerHTML = `<div class="mob-calc-item"><span class="c-lbl" style="opacity:0.6">입력 대기중</span></div>`;
+                if (entry.start && !entry.end && isTod) {
+                    const needed = neededMinsForDay(date, dates);
+                    if (needed > 0) {
+                        const ed = parseTime(entry.start) + needed + (needed >= BREAK_THRESHOLD ? 60 : 30);
+                        const estDiv = document.createElement('div'); estDiv.className = 'est-text'; estDiv.textContent = `예상 퇴근시간 ~${minsToHHMM(ed)}`;
+                        resWrap.appendChild(estDiv);
+                    }
+                }
+            }
+        }
+        bodyPanel.appendChild(resWrap);
+
+        card.appendChild(bodyPanel);
+        list.appendChild(card);
+    });
+}
+
+function updateMobileSummary(summ) {
+    document.getElementById('mobValTotal').textContent = formatMins(summ.totalActual);
+    const mCardTot = document.getElementById('mobCardTotal');
+    const mDotTot = document.getElementById('mobDotTotal');
+
+    if (summ.isOver) { mCardTot.className = 'mob-hero-card mob-over'; mDotTot.style.background = '#fff'; }
+    else { mCardTot.className = 'mob-hero-card'; mDotTot.style.background = summ.totalActual >= TARGET_HOURS ? '#10a84a' : 'rgba(255,255,255,0.4)'; }
+
+    document.getElementById('mobValRemain').textContent = summ.isOver ? '초과됨' : formatMins(summ.remaining);
+    document.getElementById('mobValRemain').style.color = summ.isOver ? 'var(--status-red)' : (summ.remaining === 0 ? 'var(--status-green)' : 'var(--text-primary)');
+
+    document.getElementById('mobValShort').textContent = summ.hasShortDay ? '있음' : '없음';
+    document.getElementById('mobValShort').style.color = summ.hasShortDay ? 'var(--status-green)' : 'var(--text-primary)';
+
+    const r1 = summ.totalActual >= TARGET_HOURS && !summ.isOver, r2 = summ.hasShortDay;
+    const mobR = document.getElementById('mobValRule');
+    if (r1 && r2) { mobR.textContent = '충족됨'; mobR.style.color = 'var(--status-green)'; }
+    else if (summ.isOver) { mobR.textContent = '초과 위반'; mobR.style.color = 'var(--status-red)'; }
+    else { mobR.textContent = '미충족'; mobR.style.color = 'var(--status-yellow)'; }
+
+    const pct = (summ.totalActual / TARGET_HOURS) * 100;
+    const mFill = document.getElementById('mobProgressFill');
+    mFill.style.width = `${Math.min(pct, 100)}%`;
+    mFill.className = 'progress-fill';
+    if (summ.isOver) mFill.classList.add('over');
+    document.getElementById('mobPctText').textContent = `${Math.round(Math.min(pct, 100))}%`;
+}
+
+
+/* ─── State Actions ─────────────────────────────────── */
+function handleDataChange(key, field, val) {
+    if (!scheduleData[key]) scheduleData[key] = {};
+
+    // If it's a focus filling event from inputs directly modifying dom and missing args
+    if (arguments.length === 5) { // fallback combo call
+        scheduleData[key]['start'] = arguments[2];
+        scheduleData[key]['end'] = arguments[4];
+    } else {
+        scheduleData[key][field] = val;
+    }
+
+    saveData(); updateAllViews();
+}
+
+function toggleHoliday(key) {
+    if (!scheduleData[key]) scheduleData[key] = {};
+    const isHol = !scheduleData[key].holiday;
+    scheduleData[key].holiday = isHol;
+    if (isHol) { scheduleData[key].start = ''; scheduleData[key].end = ''; }
+    saveData(); updateAllViews();
+}
+
+
+/* ─── Events & Init ─────────────────────────────────── */
+function bindEvents() {
+    // Nav
+    document.getElementById('deskPrevWeek').onclick = () => { currentWeekOffset--; updateAllViews(); };
+    document.getElementById('deskNextWeek').onclick = () => { currentWeekOffset++; updateAllViews(); };
+    document.getElementById('mobPrevWeek').onclick = () => { currentWeekOffset--; updateAllViews(); };
+    document.getElementById('mobNextWeek').onclick = () => { currentWeekOffset++; updateAllViews(); };
+
+    // Reset
+    const resetFn = () => {
+        if (!confirm('이번 주 데이터를 초기화하시겠습니까?')) return;
+        getWeekDates(currentWeekOffset).forEach(d => { delete scheduleData[dateKey(d)]; });
+        saveData(); updateAllViews();
+    };
+    document.getElementById('deskResetBtn').onclick = resetFn;
+    document.getElementById('mobResetBtn').onclick = resetFn;
+
+    // Mobile View Toggling
+    document.getElementById('btnGoToInput').onclick = () => {
+        document.getElementById('mobHomeView').style.display = 'none';
+        document.getElementById('mobInputView').style.display = 'block';
+        window.scrollTo(0, 0);
+    };
+    document.getElementById('btnBackHome').onclick = () => {
+        document.getElementById('mobInputView').style.display = 'none';
+        document.getElementById('mobHomeView').style.display = 'block';
+        window.scrollTo(0, 0);
+    };
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    loadData();
+    bindEvents();
+    updateAllViews();
+});
